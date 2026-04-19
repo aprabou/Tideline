@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+*.env
+pip-log.txt
+pip-delete-this-directory.txt
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.so
+
+# Data — never commit raw or processed data
+data/
+
+# Models
+models/
+*.json.model
+*.ubj
+
+# Jupyter / Marimo
+.ipynb_checkpoints/
+__marimo__/
+
+# Node
+node_modules/
+dist/
+.pnpm-store/
+*.tsbuildinfo
+
+# Vite
+dashboard/dist/
+dashboard/.vite/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# AWS / credentials
+.aws/
+*.pem
+*.key
+cdk.out/
+cdk.context.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Misc
+*.log
+*.tmp
+.cache/
