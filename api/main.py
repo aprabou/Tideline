@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 
 from models.ensemble import EnsembleWrapper, LeadResult, _prob_to_category, build_pacific_blob_replay
 from models.lightgbm_model import LEAD_TIMES
+from api.sd_predictor import get_sd_predictor, SDPredictor
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -199,6 +200,21 @@ def forecast(
     ensemble: EnsembleWrapper = Depends(get_ensemble),
 ) -> ForecastResponse:
     base_date = _parse_date(date)
+
+    # Use the San Diego MVP model for SD coastal requests
+    sd = get_sd_predictor()
+    if sd.in_sd_box(lat, lon):
+        sd_results = sd.predict(lat, lon, base_date)
+        # Map SD leads (3, 7) to the full LEAD_TIMES response
+        forecasts = []
+        for lt in LEAD_TIMES:
+            # nearest SD lead (3→3, 5→7, 7→7, 1→3)
+            nearest = min(sd_results.keys(), key=lambda k: abs(k - lt))
+            r = sd_results[nearest]
+            forecasts.append(_lead_result_to_schema(lt, base_date, r))
+        return ForecastResponse(lat=lat, lon=lon, date=date, forecasts=forecasts)
+
+    # Global fallback: ensemble stubs
     results = ensemble.predict(lat, lon, base_date)
     return ForecastResponse(
         lat=lat,

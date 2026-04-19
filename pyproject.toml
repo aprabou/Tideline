@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "tideline"
@@ -48,6 +48,8 @@ api = [
     "lightgbm>=4.3",
     "xgboost>=2.0",
     "pandas>=2.2",
+    "torch>=2.3",
+    "python-dotenv>=1.0",
 ]
 
 [tool.ruff]

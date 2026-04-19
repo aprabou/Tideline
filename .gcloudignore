@@ -1,0 +1,14 @@
+# Let gcloud send everything except heavy data dirs
+.git
+.github
+data/
+docs/
+notebooks/
+sst_rasters/
+demo/
+ds3.pdf
+*.pyc
+__pycache__
+.venv
+node_modules
+dashboard/node_modules

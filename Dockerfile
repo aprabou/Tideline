@@ -1,28 +1,31 @@
-# Tideline API — Cloud Run container
-# Build:  docker build -t tideline-api .
-# Run:    docker run -p 8080:8080 -e GEMINI_API_KEY=... tideline-api
-
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps for numpy / pandas native extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
-# Install only the runtime dependencies (not dev extras)
-RUN pip install --no-cache-dir ".[api]"
+RUN pip install --no-cache-dir --upgrade pip
 
-# Copy source
+# Install runtime dependencies directly (avoids flat-layout package discovery issues)
+RUN pip install --no-cache-dir \
+    fastapi>=0.111 \
+    "uvicorn[standard]>=0.29" \
+    numpy>=1.26 \
+    httpx>=0.27 \
+    lightgbm>=4.3 \
+    xgboost>=2.0 \
+    pandas>=2.2 \
+    torch>=2.3 \
+    python-dotenv>=1.0
+
 COPY api/      api/
 COPY models/   models/
 COPY backtest/ backtest/
+COPY features/ features/
 
-# Cloud Run injects PORT; default to 8080
 ENV PORT=8080
-
 EXPOSE 8080
 
 CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port $PORT"]

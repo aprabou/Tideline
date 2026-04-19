@@ -8,6 +8,7 @@ import pandas as pd
 
 from features.buoy_features import compute_buoy_features
 from features.calcofi_features import compute_calcofi_features
+from features.kelp_features import compute_kelp_features
 from features.satellite_features import compute_satellite_features
 from features.unified_grid import get_grid
 
@@ -15,6 +16,8 @@ from features.unified_grid import get_grid
 BUOY_DIR = Path("data/raw/buoys")
 CALCOFI_PATH = Path("data/raw/calcofi/calcofi_bottles.parquet")
 SAT_RASTER_DIR = Path("data/raw/oisst")
+SCRIPPS_KELP_PATH = Path("data/raw/ingestion/scripps_kelp_canopy.parquet")
+SDCITY_KELP_PATH = Path("data/raw/ingestion/sdcity_kelp_density.parquet")
 OUT_PATH = Path("data/silver/feature_table.parquet")
 
 START_DATE = "2015-01-01"
@@ -58,6 +61,8 @@ def build_feature_table(
     buoy_dir: Path = BUOY_DIR,
     calcofi_path: Path = CALCOFI_PATH,
     sat_raster_dir: Path = SAT_RASTER_DIR,
+    scripps_kelp_path: Path = SCRIPPS_KELP_PATH,
+    sdcity_kelp_path: Path = SDCITY_KELP_PATH,
     out_path: Path = OUT_PATH,
 ) -> pd.DataFrame:
     """Build unified daily feature table for 2015-2023."""
@@ -96,9 +101,9 @@ def build_feature_table(
                 df = df.rename(columns={"time": "date"})
             if "date" in df.columns:
                 df["date"] = pd.to_datetime(df["date"], errors="coerce")
-            # DON'T filter by date - use all available data
-            # Keep only the columns we need
+            # Keep only the columns we need; filter NDBC fill values (99/999)
             df = df[["station_id", "date", "sst"]].dropna(subset=["sst"])
+            df = df[df["sst"] < 40.0]  # realistic SST range for SoCal
             buoy_dfs.append(df)
         
         if buoy_dfs:
@@ -204,7 +209,20 @@ def build_feature_table(
             log.error("Error computing satellite features: %s", e)
     else:
         log.warning("Satellite raster directory not found: %s", sat_raster_dir)
-    
+
+    # Kelp features
+    log.info("Computing kelp features...")
+    try:
+        kelp_feats = compute_kelp_features(
+            grid, dates,
+            scripps_path=scripps_kelp_path,
+            sdcity_path=sdcity_kelp_path,
+        )
+        log.info("Computed kelp features: %d rows, %d cols", len(kelp_feats), len(kelp_feats.columns))
+        out = out.merge(kelp_feats, on=["cell_id", "date"], how="left")
+    except Exception as e:
+        log.error("Error computing kelp features: %s", e)
+
     # Add grid metadata
     out = out.merge(grid, on="cell_id", how="left")
 
@@ -213,9 +231,19 @@ def build_feature_table(
     out["month"] = out["date"].dt.month
     out["year"] = out["date"].dt.year
 
-    # Create MHW status label
-    if "sat_sst_anomaly" in out.columns:
+    # Create MHW status label — prefer satellite anomaly, fall back to buoy anomaly
+    if "sat_sst_anomaly" in out.columns and out["sat_sst_anomaly"].notna().any():
         out["mhw_status"] = (out["sat_sst_anomaly"] >= 1.0).astype(float)
+    elif "buoy_anomaly" in out.columns and out["buoy_anomaly"].notna().any():
+        log.info("sat_sst_anomaly unavailable — using buoy_anomaly for MHW label")
+        # 90th percentile of available buoy anomaly as threshold
+        thresh = float(out["buoy_anomaly"].quantile(0.90))
+        log.info("buoy_anomaly 90th percentile threshold: %.3f°C", thresh)
+        # Apply Hobday-style 5-day run filter per cell
+        above = (out.sort_values(["cell_id", "date"])["buoy_anomaly"] >= thresh)
+        run_id = (above != above.shift()).cumsum()
+        run_len = above.groupby(run_id).transform("sum")
+        out["mhw_status"] = ((above) & (run_len >= 5)).astype(float)
     else:
         out["mhw_status"] = 0.0
     

@@ -10,7 +10,7 @@ import requests
 from google.cloud import storage
 from tqdm import tqdm
 
-CALCOFI_ZIP_URL = "https://calcofi.org/downloads/database/CalCOFI_Database_194903-202001_csv_16October2020.zip"
+CALCOFI_ZIP_URL = "https://calcofi.org/downloads/database/CalCOFI_Database_194903-202105_csv_16October2023.zip"
 OUTPUT_PATH = Path("data/raw/ingestion/calcofi_bottle.parquet")
 DOWNLOAD_PATH = Path("data/raw/ingestion/calcofi_source.zip")
 GCS_BLOB_PATH = "ingestion/calcofi_bottle.parquet"
@@ -57,12 +57,15 @@ def download_zip(url: str = CALCOFI_ZIP_URL, out_path: Path = DOWNLOAD_PATH) -> 
 
 def load_csv_from_zip(zip_path: Path) -> pd.DataFrame:
     with zipfile.ZipFile(zip_path) as zf:
-        csv_candidates = [name for name in zf.namelist() if name.lower().endswith(".csv")]
-        if not csv_candidates:
-            raise ValueError("CalCOFI zip archive did not contain any CSV files")
-        csv_name = csv_candidates[0]
-        with zf.open(csv_name) as stream:
-            return pd.read_csv(stream, low_memory=False)
+        names = zf.namelist()
+        bottle_name = next(n for n in names if n.endswith("Bottle.csv"))
+        cast_name = next(n for n in names if n.endswith("Cast.csv"))
+        bottle = pd.read_csv(zf.open(bottle_name), low_memory=False, encoding="latin-1")
+        cast = pd.read_csv(
+            zf.open(cast_name), low_memory=False, encoding="latin-1",
+            usecols=["Cst_Cnt", "Date", "Lat_Dec", "Lon_Dec", "St_Line", "St_Station"],
+        )
+        return bottle.merge(cast, on="Cst_Cnt", how="left")
 
 
 def transform_bottle_dataframe(df: pd.DataFrame) -> pd.DataFrame:
