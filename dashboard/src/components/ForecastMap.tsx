@@ -1,7 +1,3 @@
-/**
- * ForecastMap.tsx — Deck.gl/MapLibre map showing MHW probability grid overlay.
- */
-
 import { useEffect, useState } from "react";
 import { DeckGL } from "@deck.gl/react";
 import { ScatterplotLayer } from "@deck.gl/layers";
@@ -14,18 +10,17 @@ interface ForecastMapProps {
 }
 
 const INITIAL_VIEW = {
-  longitude: -122.5,
-  latitude: 37.5,
+  longitude: -122.0,
+  latitude: 38.0,
   zoom: 5,
   pitch: 0,
   bearing: 0,
 };
 
 function probToColor(prob: number): [number, number, number, number] {
-  // Interpolate from green → red based on probability
   const r = Math.round(255 * prob);
   const g = Math.round(255 * (1 - prob));
-  return [r, g, 50, 200];
+  return [r, g, 50, 210];
 }
 
 export default function ForecastMap({ date, onCellClick }: ForecastMapProps) {
@@ -34,14 +29,7 @@ export default function ForecastMap({ date, onCellClick }: ForecastMapProps) {
 
   useEffect(() => {
     setLoading(true);
-    getGridForecast({
-      date,
-      lat_min: 30,
-      lat_max: 50,
-      lon_min: -130,
-      lon_max: -115,
-      step: 0.5,
-    })
+    getGridForecast(date, 7)
       .then(setCells)
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -51,7 +39,7 @@ export default function ForecastMap({ date, onCellClick }: ForecastMapProps) {
     id: "mhw-grid",
     data: cells,
     getPosition: (d) => [d.lon, d.lat],
-    getRadius: 25000,
+    getRadius: 80000,
     getFillColor: (d) => probToColor(d.prob_mhw),
     pickable: true,
     onClick: ({ object }) => object && onCellClick?.(object),
@@ -60,7 +48,7 @@ export default function ForecastMap({ date, onCellClick }: ForecastMapProps) {
   return (
     <div style={{ position: "relative", width: "100%", height: "600px" }}>
       {loading && (
-        <div style={{ position: "absolute", top: 8, left: 8, zIndex: 10, color: "#fff" }}>
+        <div style={{ position: "absolute", top: 8, left: 8, zIndex: 10, background: "rgba(0,0,0,0.6)", color: "#fff", padding: "4px 10px", borderRadius: 4, fontSize: 12 }}>
           Loading forecast…
         </div>
       )}
@@ -70,9 +58,7 @@ export default function ForecastMap({ date, onCellClick }: ForecastMapProps) {
         layers={[layer]}
         getTooltip={({ object }: { object?: GridCell }) =>
           object
-            ? {
-                html: `<b>${(object.prob_mhw * 100).toFixed(0)}% MHW</b><br/>${object.lat.toFixed(2)}°N ${Math.abs(object.lon).toFixed(2)}°W`,
-              }
+            ? { html: `<b>${(object.prob_mhw * 100).toFixed(0)}% MHW risk</b><br/>${object.lat.toFixed(1)}°N ${Math.abs(object.lon).toFixed(1)}°W<br/><i>${object.category}</i>` }
             : null
         }
       >
@@ -81,19 +67,8 @@ export default function ForecastMap({ date, onCellClick }: ForecastMapProps) {
           attributionControl={false}
         />
       </DeckGL>
-      {/* Legend */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 24,
-          right: 16,
-          background: "rgba(0,0,0,0.7)",
-          color: "#fff",
-          padding: "10px 14px",
-          borderRadius: 6,
-          fontSize: 12,
-        }}
-      >
+      <div style={{ position: "absolute", bottom: 24, right: 16, background: "rgba(0,0,0,0.75)", color: "#fff", padding: "10px 14px", borderRadius: 6, fontSize: 12 }}>
+        <div style={{ marginBottom: 6, fontWeight: 600 }}>7-day MHW risk</div>
         {Object.entries(CATEGORY_COLORS).map(([cat, color]) => (
           <div key={cat} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
             <span style={{ width: 12, height: 12, background: color, borderRadius: 2, display: "inline-block" }} />
