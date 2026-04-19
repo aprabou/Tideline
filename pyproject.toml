@@ -19,6 +19,7 @@ dependencies = [
     "mlflow>=2.14",
     "joblib>=1.4",
     "matplotlib>=3.8",
+    "torch>=2.3",
     "xgboost>=2.0",
     "boto3>=1.34",
     "google-cloud-storage>=2.16",
