@@ -12,9 +12,8 @@ from models.climatology import attach_climatology, compute_cell_climatology
 
 
 SAT_VARIABLE_MAP = {
-    "CRW_SST": "sat_sst",
-    "CRW_SSTANOMALY": "sat_sst_anomaly",
-    "CRW_DHW": "sat_dhw",
+    "sst": "sat_sst",
+    "anom": "sat_sst_anomaly",
 }
 
 
@@ -30,54 +29,57 @@ def _resolve_coord_name(ds: xr.Dataset, names: list[str]) -> str:
     raise ValueError(f"Could not find coordinate in {names}")
 
 
+def _normalize_longitudes(lons: np.ndarray) -> np.ndarray:
+    return ((lons + 180.0) % 360.0) - 180.0
+
+
 def _days_since_last_true(series: pd.Series) -> pd.Series:
     n = len(series)
     idx = np.arange(n)
-    last = np.where(series.to_numpy(dtype=bool), idx, -10_000_000)
-    last = np.maximum.accumulate(last)
-    out = idx - last
-    out[last < 0] = np.nan
+    last = np.where(series.to_numpy(dtype=bool), idx, np.nan).astype(float)
+    last = pd.Series(last).ffill().to_numpy(dtype=float)
+    out = idx.astype(float) - last
+    out[np.isnan(last)] = np.nan
     return pd.Series(out, index=series.index, dtype=float)
 
 
-def _lookup_nearest_cells(ds: xr.Dataset, grid: pd.DataFrame) -> pd.DataFrame:
+def _lookup_nearest_cells(ds: xr.Dataset, grid: pd.DataFrame, target_date: pd.Timestamp) -> pd.DataFrame:
     lat_name = _resolve_coord_name(ds, ["latitude", "lat"])
     lon_name = _resolve_coord_name(ds, ["longitude", "lon"])
     time_name = _resolve_coord_name(ds, ["time"])
 
     lats = ds[lat_name].to_numpy()
-    lons = ds[lon_name].to_numpy()
+    lons = _normalize_longitudes(ds[lon_name].to_numpy())
     times = pd.to_datetime(ds[time_name].to_numpy())
+    if len(times) == 0:
+        return pd.DataFrame(columns=["date", "cell_id", "sat_sst", "sat_sst_anomaly", "sat_sst_gradient"])
 
     lon_mesh, lat_mesh = np.meshgrid(lons, lats)
     pix_coords = np.column_stack([lat_mesh.ravel(), lon_mesh.ravel()])
     tree = _ckdtree(pix_coords)
     _, pix_idx = tree.query(grid[["lat", "lon"]].to_numpy(), k=1)
 
-    n_time = len(times)
     n_lat = len(lats)
     n_lon = len(lons)
 
-    lookup: dict[str, np.ndarray] = {}
-    for src, out_name in SAT_VARIABLE_MAP.items():
-        arr = ds[src].to_numpy().reshape(n_time, n_lat * n_lon)
-        lookup[out_name] = arr[:, pix_idx]
+    # OISST files store a single time slice and a single z-level.
+    sst_var = ds["sst"].isel(time=0, zlev=0).to_numpy()
+    anom_var = ds["anom"].isel(time=0, zlev=0).to_numpy()
+    grad_lat = sobel(sst_var, axis=0, mode="nearest")
+    grad_lon = sobel(sst_var, axis=1, mode="nearest")
+    grad = np.hypot(grad_lat, grad_lon).reshape(n_lat * n_lon)
 
-    sst_3d = ds["CRW_SST"].to_numpy()
-    grad_lat = sobel(sst_3d, axis=1, mode="nearest")
-    grad_lon = sobel(sst_3d, axis=2, mode="nearest")
-    grad = np.hypot(grad_lat, grad_lon).reshape(n_time, n_lat * n_lon)
-    lookup["sat_sst_gradient"] = grad[:, pix_idx]
+    sst_flat = sst_var.reshape(n_lat * n_lon)
+    anom_flat = anom_var.reshape(n_lat * n_lon)
 
     cell_ids = grid["cell_id"].to_numpy()
     out = pd.DataFrame(
         {
-            "date": np.repeat(times, len(cell_ids)),
-            "cell_id": np.tile(cell_ids, n_time),
-            "sat_sst": lookup["sat_sst"].reshape(-1),
-            "sat_sst_anomaly": lookup["sat_sst_anomaly"].reshape(-1),
-            "sat_dhw": lookup["sat_dhw"].reshape(-1),
-            "sat_sst_gradient": lookup["sat_sst_gradient"].reshape(-1),
+            "date": np.full(len(cell_ids), target_date),
+            "cell_id": cell_ids,
+            "sat_sst": sst_flat[pix_idx],
+            "sat_sst_anomaly": anom_flat[pix_idx],
+            "sat_sst_gradient": grad[pix_idx],
         }
     )
     return out
@@ -96,13 +98,22 @@ def compute_satellite_features(
             base[col] = np.nan
         return base
 
-    ds = xr.open_mfdataset(nc_files, combine="by_coords", engine="netcdf4")
-    try:
-        sat = _lookup_nearest_cells(ds, grid)
-    finally:
-        ds.close()
+    frames: list[pd.DataFrame] = []
+    wanted_dates = set(pd.to_datetime(date_index).normalize())
+    for nc_file in nc_files:
+        with xr.open_dataset(nc_file) as ds:
+            time_name = _resolve_coord_name(ds, ["time"])
+            target_date = pd.to_datetime(ds[time_name].to_numpy()).normalize()[0]
+            if target_date not in wanted_dates:
+                continue
+            frames.append(_lookup_nearest_cells(ds, grid, pd.Timestamp(target_date)))
 
-    sat = sat[sat["date"].isin(date_index)].copy()
+    if not frames:
+        for col in ["sat_sst", "sat_sst_anomaly", "sat_dhw", "sat_sst_gradient", "sat_days_since_cold"]:
+            base[col] = np.nan
+        return base
+
+    sat = pd.concat(frames, ignore_index=True)
     sat = base.merge(sat, on=["cell_id", "date"], how="left")
 
     clim = compute_cell_climatology(sat, value_col="sat_sst", date_col="date", group_col="cell_id")
@@ -112,10 +123,16 @@ def compute_satellite_features(
         sat.assign(_cold=cold)
         .sort_values(["cell_id", "date"])
         .groupby("cell_id", group_keys=False)["_cold"]
-        .apply(_days_since_last_true)
-        .reset_index(level=0, drop=True)
+        .transform(_days_since_last_true)
     )
-    sat = sat.drop(columns=["sat_climatology", "_cold"])
+    sat = sat.drop(columns=["sat_climatology"], errors="ignore")
+
+    # Degree heating weeks derived from positive anomaly accumulation.
+    sat["sat_dhw"] = (
+        sat.sort_values(["cell_id", "date"])
+        .groupby("cell_id", group_keys=False)["sat_sst_anomaly"]
+        .transform(lambda s: s.clip(lower=0).rolling(84, min_periods=1).sum() / 7.0)
+    )
 
     return sat[
         ["cell_id", "date", "sat_sst", "sat_sst_anomaly", "sat_dhw", "sat_sst_gradient", "sat_days_since_cold"]
